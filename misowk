@@ -1,0 +1,351 @@
+%%
+clear;clc;close all;
+Fc=4e10;
+C=3e8;
+lambda=C/Fc;
+V=300;
+H=10000;
+Lsar=200;
+%%
+Tr=2e-6;
+Br=3e8;
+Kr=Br/Tr;
+N=8;
+a=120*lambda;
+beta=30*pi/180;
+Yc=H/cos(beta);
+Y0=100;
+Fsr=2*Br;                        
+dt=1/Fsr;                      
+Rmin=sqrt((Yc-Y0)^2+H^2);         
+Rmax=sqrt((Yc+Y0)^2+H^2+(Lsar/2)^2);
+Nfast=ceil(2*(Rmax-Rmin)/C/dt+Tr/dt);
+Nfast=2^nextpow2(Nfast);                 
+tm=linspace(2*Rmin/C,2*Rmax/C+Tr,Nfast);    
+dt=(2*Rmax/C+Tr-2*Rmin/C)/(Nfast);          
+Fsr=1/dt;
+%%
+Xmin=-50;
+Xmax=50;
+Tsar=Lsar/V;
+R0=sqrt(Yc^2+H^2);
+Ka=-2*V^2/lambda/R0; 
+Ba=abs(Ka*Tsar);
+PRF=2*Ba;                         
+PRT=1/PRF;                         
+ds=PRT;                           
+Nslow=ceil((Xmax-Xmin+Lsar)/V/ds); 
+Nslow=2^nextpow2(Nslow);           
+sn=linspace((Xmin-Lsar/2)/V,(Xmax+Lsar/2)/V,Nslow);
+PRT=(Xmax-Xmin+Lsar)/V/(Nslow);    
+PRF=1/PRT;
+ds=PRT;
+%%  
+xi=100*pi;
+L=abs(xi)*sn;
+theta_T=beta;
+Ptarget=[0 H/cos(theta_T) H
+    2 H/cos(theta_T)+1 H
+    -2 H/cos(theta_T)+1 H
+    2 H/cos(theta_T)-1 H
+    -2 H/cos(theta_T)-1 H];
+T=Ptarget;
+N=Nslow;                                  
+M=Nfast;                                 
+T=Ptarget;                               
+Srnm=zeros(N,M);
+%%
+for k=1:1:1;
+    x_beta=T(k,1);
+    y_beta=T(k,2)*cos(beta)-T(k,3)*sin(beta);
+    z_beta=T(k,2)*sin(beta)+T(k,3)*cos(beta);
+    R0=sqrt(T(k,3)^2+T(k,2)^2);
+    KI=2*pi/lambda;
+    sigma=1;
+    Dslow=sn*V-T(k,1);                  
+    Rt=sqrt(Dslow.^2+R0^2);       
+    tau=2*Rt/C;                          
+    phi=atan(y_beta./(x_beta-V*sn));          
+    theta=asin(sqrt(Dslow.^2+y_beta^2)./sqrt(Dslow.^2+R0.^2));                      
+    Dfast=ones(N,1)*tm-tau'*ones(1,M);
+    phase=pi*Kr*Dfast.^2-(4*pi/lambda)*(Rt'*ones(1,M))+((L.*phi)'*ones(1,M));
+    vciau=besselj(L'*ones(1,M),a*KI*sin(theta'*ones(1,M)));
+    Srnm=Srnm+sigma*vciau.*exp(j*phase).*(0<Dfast&Dfast<Tr).*((abs(Dslow)<Lsar/2)'*ones(1,M));   
+end
+%% ================================================================
+bc=zeros(N,M);
+for k=1:1:1;
+K0=xi/2;
+Kl=V*xi/y_beta/pi;
+R0=sqrt(T(k,3)^2+T(k,2)^2);
+ Dslow=sn*V-T(k,1);             
+    Rt=sqrt(Dslow.^2+R0^2);  
+    theta_1=acos((sqrt(Rt.^2-H^2)*sin(beta)+H*cos(beta))./Rt);
+     h_bessel=1./(besselj(L'*ones(1,M),(a*KI*sin(theta_1'*ones(1,M)))));
+    phi_b=exp(-j*pi*K0*(-abs(sn)-x_beta/V)'*ones(1,M));
+    bc=bc+h_bessel.*phi_b;
+end
+Srnm=Srnm.*bc;
+S1=fftshift(fft2(fftshift(Srnm)));
+%% 
+f=linspace(-PRF/2,+PRF/2,Nslow);            
+fr=linspace(-Fsr/2,+Fsr/2,Nfast);                                        
+Theta_range_comp = ones(N,1)*(pi/Kr*fr.^2);       
+Theta_sqrt_1 = ones(N,1)*((Fc+fr).^2);                  
+Theta_sqrt_2 = (C^2*f.^2/4/V^2).'*ones(1,M);         
+Theta_sqrt = 4*pi*R0/C*sqrt(Theta_sqrt_1 - Theta_sqrt_2);  
+Theta_2d_ref = Theta_range_comp + Theta_sqrt;             
+Ref_2d = exp(j*Theta_2d_ref);                                       
+S2 = Ref_2d .* S1;                                                                        
+%% 
+D_fr=sqrt( ones(N,1)*(Fc + fr).^2 - (C^2*f.^2/4/V^2).' * ones(1,M)) - ones(N,1) * (fr+Fc);
+Ndkx=round(D_fr*M/Fsr);
+Deci=D_fr*M/Fsr-Ndkx;
+Nd=max(max(abs(Ndkx)));
+h = waitbar(0,'Stolt');
+Pi=8;
+B=[S2(:,M-Nd-Pi:end) S2 S2(:,1:Nd+Pi)];
+Stolt=zeros(N,M);
+for m=1:N
+    for n=Pi:M
+        p=sinc(Deci(m,n)+Pi/2-1:-1:Deci(m,n)-Pi/2);
+        d=B(m,n+Nd+Pi+Ndkx(m,n)-Pi/2:n+Nd+Pi+Ndkx(m,n)+Pi/2-1);
+        Stolt(m,n)=p*d';
+    end
+waitbar(m/N)
+end
+close(h)
+Stolt=rot90(Stolt,2);
+S3=fftshift(ifft2(fftshift(Stolt)));
+%% =======================================================================
+echo=S3;
+Max=max(max(echo));  
+[X,Y]=find(echo==Max);
+DArea=echo(X-90:X+30,Y-22:Y+28); 
+E1=fftshift(fft(DArea),1);
+E2=fftshift(fft(E1.'),1);
+D2=4;
+A3=[zeros(51,floor(121*(D2-1)/2)) E2 zeros(51,(D2-1)*121-floor(121*(D2-1)/2))];
+A4=[zeros(D2*121,floor(51*(D2-1)/2)) A3.' zeros(D2*121,(D2-1)*51-floor(51*(D2-1)/2))];
+A4=A4.';
+A5=ifft(fftshift(A4,1));
+A6=ifft(fftshift(A5.',1));
+A7=abs(A6);
+figure(1);
+colormap jet;
+imagesc(A7);
+xlabel('Range sampling point'),ylabel('Azimuth sampling point'),
+A8=A6';
+Max_one=max(max(A7'));     
+[i,j]=find(A7'==Max_one);   
+%%
+% C1=A8(75:105,75:225);
+% C6=abs(C1);
+% Max_one1=max(max(C6)); 
+% [i,j]=find(A7'==Max_one1);
+% A_1=A8(i-60:i+60,j);       
+% B_1=A8(i,j-60:j+60);     
+% A1_1=fftshift(fft(A_1.'));
+% B1_1=fftshift(fft(B_1));
+% D1=16;                    
+% R1_1=[zeros(1,floor(length(A1_1)*(D1-1)/2)) A1_1 zeros(1,floor(length(A1_1)*(D1-1)/2))];
+% B2_1=[zeros(1,floor(length(B1_1)*(D1-1)/2)) B1_1 zeros(1,floor(length(B1_1)*(D1-1)/2))];
+% R2_1=abs(ifft(fftshift(R1_1)));
+% A2_1=abs(ifft(fftshift(B2_1)));
+% r2_1=20*log10(R2_1/max(R2_1));
+% a21=20*log10(A2_1/max(A2_1));
+% figure(22);plot(a21);xlabel('Azimuth sampling point'),ylabel('Amplitude(dB)');
+% %%
+% 
+% C2=A8(75:105,275:425);
+% C7=abs(C2);
+% Max_one2=max(max(C7)); 
+% [i,j]=find(A7'==Max_one2);
+% A_2=A8(i-60:i+60,j);      
+% B_2=A8(i,j-60:j+60);       
+% A1_2=fftshift(fft(A_2.'));
+% B1_2=fftshift(fft(B_2));
+% D1=16;                    
+% R1_2=[zeros(1,floor(length(A1_2)*(D1-1)/2)) A1_2 zeros(1,floor(length(A1_2)*(D1-1)/2))];
+% B2_2=[zeros(1,floor(length(B1_2)*(D1-1)/2)) B1_2 zeros(1,floor(length(B1_2)*(D1-1)/2))];
+% R2_2=abs(ifft(fftshift(R1_2)));
+% A2_2=abs(ifft(fftshift(B2_2)));
+% r2_2=20*log10(R2_2/max(R2_2));
+% a22=20*log10(A2_2/max(A2_2));
+% figure(32);plot(a22);xlabel('Azimuth sampling point'),ylabel('Amplitude(dB)');
+% %%
+%
+% C3=A8(80:120,200:300);
+% C8=abs(C3);
+% Max_one3=max(max(C8)); 
+% [i,j]=find(A7'==Max_one3);
+% A_3=A8(i-60:i+60,j);   
+% B_3=A8(i,j-60:j+60);     
+% A1_3=fftshift(fft(A_3.'));
+% B1_3=fftshift(fft(B_3));
+% D1=16;                      
+% R1_3=[zeros(1,floor(length(A1_3)*(D1-1)/2)) A1_3 zeros(1,floor(length(A1_3)*(D1-1)/2))];
+% B2_3=[zeros(1,floor(length(B1_3)*(D1-1)/2)) B1_3 zeros(1,floor(length(B1_3)*(D1-1)/2))];
+% R2_3=abs(ifft(fftshift(R1_3)));
+% A2_3=abs(ifft(fftshift(B2_3)));
+% r2_3=20*log10(R2_3/max(R2_3));
+% a23=20*log10(A2_3/max(A2_3));
+% figure(42);plot(a23);xlabel('Azimuth sampling point'),ylabel('Amplitude(dB)')
+% %%
+%
+% C4=A8(105:140,75:225);
+% C9=abs(C4);
+% Max_one4=max(max(C9)); 
+% [i,j]=find(A7'==Max_one4);
+% A_4=A8(i-60:i+60,j);     
+% B_4=A8(i,j-60:j+60);     
+% A1_4=fftshift(fft(A_4.'));
+% B1_4=fftshift(fft(B_4));
+% D1=16;                      
+% R1_4=[zeros(1,floor(length(A1_4)*(D1-1)/2)) A1_4 zeros(1,floor(length(A1_4)*(D1-1)/2))];
+% B2_4=[zeros(1,floor(length(B1_4)*(D1-1)/2)) B1_4 zeros(1,floor(length(B1_4)*(D1-1)/2))];
+% R2_4=abs(ifft(fftshift(R1_4)));
+% A2_4=abs(ifft(fftshift(B2_4)));
+% r2_4=20*log10(R2_4/max(R2_4));
+% a24=20*log10(A2_4/max(A2_4));
+% figure(52);plot(a24);xlabel('Azimuth sampling point'),ylabel('Amplitude(dB)')
+% %%
+% C5=A8(105:140,275:425);
+% C10=abs(C5);
+% Max_one5=max(max(C10)); 
+% [i,j]=find(A7'==Max_one5);
+% A_5=A8(i-60:i+60,j);    
+% B_5=A8(i,j-60:j+60);      
+% A1_5=fftshift(fft(A_5.'));
+% B1_5=fftshift(fft(B_5));
+% D1=16;                   
+% R1_5=[zeros(1,floor(length(A1_5)*(D1-1)/2)) A1_5 zeros(1,floor(length(A1_5)*(D1-1)/2))];
+% B2_5=[zeros(1,floor(length(B1_5)*(D1-1)/2)) B1_5 zeros(1,floor(length(B1_5)*(D1-1)/2))];
+% R2_5=abs(ifft(fftshift(R1_5)));
+% A2_5=abs(ifft(fftshift(B2_5)));
+% r2_5=20*log10(R2_5/max(R2_5));
+% a25=20*log10(A2_5/max(A2_5));
+% figure(62);plot(a25);xlabel('Azimuth sampling point'),ylabel('Amplitude(dB)')
+Max_one=max(max(A7'));    
+[i,j]=find(A7'==Max_one);  
+A8=A6';
+A=A8(i-80:i+80,j);      
+B=A8(i,j-80:j+80);    
+A1=fftshift(fft(A.'));
+B1=fftshift(fft(B));
+D1=16;                    
+R1=[zeros(1,floor(length(A1)*(D1-1)/2)) A1 zeros(1,floor(length(A1)*(D1-1)/2))];
+B2=[zeros(1,floor(length(B1)*(D1-1)/2)) B1 zeros(1,floor(length(B1)*(D1-1)/2))];
+R2=abs(ifft(fftshift(R1)));
+A2=abs(ifft(fftshift(B2)));
+r2=20*log10(R2/max(R2));
+a2=20*log10(A2/max(A2));
+[max_r,POS_r]=max(r2);
+r3=POS_r;
+while(r2(r3)>-3)  
+ r3=r3-1; 
+end;
+rWidth_3db1=r3;
+for r4=rWidth_3db1:-1:1
+    if R2(r4)<R2(r4-1)
+   break
+    end
+end
+zero_left=r4;
+for r5=zero_left-1:-1:1
+    if R2(r5)>R2(r5-1)
+   break
+    end
+end
+r_Sum_sidelobe1=0; 
+for rs1=1:zero_left-1   
+r_Sum_sidelobe1 = r_Sum_sidelobe1 +R2(rs1) * R2(rs1);
+end
+r3=POS_r+1;
+while(r2(r3)>-3)
+ r3=r3+1;
+end;
+rWidth_3db2=r3;
+for r6=rWidth_3db2:length(r2)
+    if R2(r6)<R2(r6+1)
+   break
+    end
+end
+zero_right=r6;
+for r7=zero_right+1:length(r2)
+    if R2(r7)>R2(r7+1)
+   break
+    end
+end
+r_Sum_mainlobe=0;
+for r8=zero_left:zero_right   
+  r_Sum_mainlobe= r_Sum_mainlobe+R2(r8)*R2(r8);
+end
+r_Sum_sidelobe =r_Sum_sidelobe1 ;
+for rs2=zero_right+1:length(r2)
+   r_Sum_sidelobe=r_Sum_sidelobe +R2(rs2)*R2(rs2);
+end
+rMax_sidelobe=max(R2(r5),R2(r7));
+rMax_mainlobe=max(R2);
+ISLRr=10*log10(r_Sum_sidelobe/r_Sum_mainlobe);
+PSLRr=20*log10(rMax_sidelobe/rMax_mainlobe); 
+r_3db=rWidth_3db2-rWidth_3db1+2;
+fenbianlv_r=C*r_3db/(2*Fc*D1*D2);
+disp('Range resolution');disp(fenbianlv_r)     
+disp('Range ISLR');disp(ISLRr)     
+disp('Range PSLR');disp(PSLRr)     
+[max_a,POS_a]=max(a2);
+a3=POS_a;
+a_Sum_sidelobe1=0; 
+while(a2(a3)>-3)  
+ a3=a3-1;
+end;
+aWidth_3db1=a3;
+for a4=aWidth_3db1:-1:1
+    if A2(a4)<A2(a4-1)
+   break
+    end
+end
+a_zero_left=a4;
+for a5=a_zero_left-1:-1:1
+    if A2(a5)>A2(a5-1)
+   break
+    end
+end
+for as1=1:a_zero_left-1   
+a_Sum_sidelobe1 = a_Sum_sidelobe1 +A2(as1) * A2(as1);
+end
+a3=POS_a+1;
+while(a2(a3)>-3)
+ a3=a3+1;
+end;
+aWidth_3db2=a3;
+for a6=aWidth_3db2:length(a2)
+    if A2(a6)<A2(a6+1)
+   break
+    end
+end
+a_zero_right=a6;
+for a7=a_zero_right+1:length(a2)
+    if A2(a7)>A2(a7+1)
+   break
+    end
+end
+a_Sum_mainlobe=0;
+for a8=a_zero_left:a_zero_right    
+  a_Sum_mainlobe=a_Sum_mainlobe+A2(a8)*A2(a8);
+end
+a_Sum_sidelobe =a_Sum_sidelobe1 ;
+for as2=a_zero_right+1:length(a2)
+a_Sum_sidelobe=a_Sum_sidelobe +A2(as2)*A2(as2);
+end
+aMax_sidelobe=max(A2(a5),A2(a7));
+aMax_mainlobe=max(A2);
+figure(2);plot(a2);xlabel('Azimuth sampling point'),ylabel('Amplitude(dB)');
+a_3db=aWidth_3db2-aWidth_3db1+2;
+fenbianlv_a=V*a_3db/(PRF*D1*D2);
+ISLRa=10*log10(a_Sum_sidelobe/a_Sum_mainlobe);
+PSLRa=20*log10(aMax_sidelobe/aMax_mainlobe);
+disp('Azimuth resolution');disp(fenbianlv_a) 
+disp('Azimuth ISLR');disp(ISLRa)            
+disp('Azimuth PSLR');disp(PSLRa) 
