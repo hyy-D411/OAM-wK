@@ -1,0 +1,2 @@
+function s=ifty(fs);
+s=fftshift(ifft(fftshift(fs.'))).';
