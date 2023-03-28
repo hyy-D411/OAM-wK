@@ -1,0 +1,2 @@
+function s=iftx(fs);
+s=fftshift(ifft(fftshift(fs)));
